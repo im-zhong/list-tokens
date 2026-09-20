@@ -184,6 +184,12 @@ function newConfig(): string {
   return join(tmpRoot, `${crypto.randomUUID()}.json`);
 }
 
+function writeTempConfig(name: string, content: string): string {
+  const file = join(tmpRoot, `${crypto.randomUUID()}-${name}`);
+  writeFileSync(file, content);
+  return file;
+}
+
 // Async spawn so the in-process mock server stays responsive while the child
 // fetches from it (spawnSync would block the event loop and deadlock).
 async function run(
@@ -196,6 +202,9 @@ async function run(
       ...process.env,
       LIST_TOKENS_CONFIG: config,
       LIST_TOKENS_API_URL: `http://127.0.0.1:${server.port}`,
+      // Point at a missing file so list output stays independent of the
+      // developer's real Claude config; tests that need fixtures override it.
+      LIST_TOKENS_CLAUDE_CONFIGS: join(tmpRoot, "no-such-claude-config"),
       NO_COLOR: "1",
       ...extraEnv,
     },
@@ -461,6 +470,46 @@ describe("list", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("No API keys configured yet");
     expect(result.stdout).toContain("list-tokens add <name> <api-key>");
+  });
+
+  test("marks the key Claude Code is currently using", async () => {
+    const config = newConfig();
+    await run(["add", "work", "good-key"], config);
+    await run(["add", "other", "flat-key"], config);
+    const settings = writeTempConfig(
+      "settings.json",
+      JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "good-key" } }),
+    );
+
+    const result = await run(["list"], config, { LIST_TOKENS_CLAUDE_CONFIGS: settings });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("work  (plan: max)  good-key  ← claude code");
+    expect(result.stdout).toContain("other  flat-key\n");
+    expect(result.stdout).not.toContain("flat-key  ← claude code");
+
+    const json = await run(["--json"], config, { LIST_TOKENS_CLAUDE_CONFIGS: settings });
+    const parsed = JSON.parse(json.stdout) as {
+      keys: Array<{ name: string; inUse?: boolean }>;
+      claudeCode: { using: string | null };
+    };
+    expect(parsed.keys.find((k) => k.name === "work")?.inUse).toBe(true);
+    expect(parsed.keys.find((k) => k.name === "other")?.inUse).toBeUndefined();
+    expect(parsed.claudeCode.using).toBe("work");
+  });
+
+  test("notes when Claude Code uses a key that is not stored", async () => {
+    const config = newConfig();
+    await run(["add", "work", "good-key"], config);
+    const unknown = `${"e".repeat(32)}.${"f".repeat(16)}`;
+    const settings = writeTempConfig(
+      "settings.json",
+      JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: unknown } }),
+    );
+
+    const result = await run(["list"], config, { LIST_TOKENS_CLAUDE_CONFIGS: settings });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("which is not in this list");
+    expect(result.stdout).not.toContain("← claude code");
   });
 });
 

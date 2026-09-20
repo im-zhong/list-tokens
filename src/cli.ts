@@ -18,7 +18,7 @@ import {
   serverCarriesKey,
 } from "./claude";
 import { fetchQuota } from "./quota";
-import { type KeyReport, renderHuman, renderJson } from "./report";
+import { type ClaudeUsage, type KeyReport, renderHuman, renderJson } from "./report";
 import {
   addKey,
   configPath,
@@ -275,10 +275,25 @@ async function runList(json: boolean): Promise<void> {
     console.log(`No API keys configured yet. Add one with:\n  ${TOOL} add <name> <api-key>`);
     return;
   }
-  const reports = await Promise.all(data.keys.map(reportForKey));
-  const output = json
-    ? renderJson(reports)
+  const { env } = await gatherClaudeTargets(claudeConfigFiles());
+  const active = env.ANTHROPIC_AUTH_TOKEN;
+  const reports = await Promise.all(
+    data.keys.map(async (key) => ({
+      ...(await reportForKey(key)),
+      inUse: active !== undefined && key.apiKey === active ? true : undefined,
+    })),
+  );
+  const usingName = reports.find((report) => report.inUse === true)?.name ?? null;
+  const claude: ClaudeUsage = {
+    using: usingName,
+    ...(active !== undefined && usingName === null ? { unrecognized: maskKey(active) } : {}),
+  };
+  let output = json
+    ? renderJson(reports, claude)
     : renderHuman(reports, { now: Date.now(), color: useColor() });
+  if (!json && claude.unrecognized !== undefined) {
+    output += `\nclaude code is using ${claude.unrecognized}, which is not in this list\n`;
+  }
   process.stdout.write(output);
 }
 

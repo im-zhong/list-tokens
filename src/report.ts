@@ -8,8 +8,18 @@ import type { QuotaInfo } from "./quota";
 export interface KeyReport {
   name: string;
   apiKey?: string;
+  /** True when Claude Code's settings currently authenticate with this key. */
+  inUse?: boolean;
   quota?: QuotaInfo;
   error?: string;
+}
+
+/** What Claude Code currently authenticates with, for the list output. */
+export interface ClaudeUsage {
+  /** Name of the stored key in use, or null when it is not in the store. */
+  using: string | null;
+  /** Masked ANTHROPIC_AUTH_TOKEN when it matches no stored key. */
+  unrecognized?: string;
 }
 
 export interface RenderOptions {
@@ -23,6 +33,7 @@ interface Style {
   red(text: string): string;
   green(text: string): string;
   yellow(text: string): string;
+  cyan(text: string): string;
 }
 
 const PLAIN: Style = {
@@ -30,6 +41,7 @@ const PLAIN: Style = {
   red: (text) => text,
   green: (text) => text,
   yellow: (text) => text,
+  cyan: (text) => text,
 };
 
 const ANSI: Style = {
@@ -37,6 +49,7 @@ const ANSI: Style = {
   red: (text) => `\x1b[31m${text}\x1b[39m`,
   green: (text) => `\x1b[32m${text}\x1b[39m`,
   yellow: (text) => `\x1b[33m${text}\x1b[39m`,
+  cyan: (text) => `\x1b[36m${text}\x1b[39m`,
 };
 
 /**
@@ -88,7 +101,8 @@ export function renderHuman(reports: KeyReport[], options: RenderOptions): strin
   const blocks: Block[] = reports.map((report) => {
     const plan = report.quota?.level !== undefined ? `  (plan: ${report.quota.level})` : "";
     const keyText = report.apiKey !== undefined ? `  ${report.apiKey}` : "";
-    const header = `${style.bold(report.name)}${plan}${keyText}`;
+    const inUse = report.inUse === true ? `  ${style.cyan("← claude code")}` : "";
+    const header = `${style.bold(report.name)}${plan}${keyText}${inUse}`;
     if (report.error) {
       return { header, error: report.error, rows: [] };
     }
@@ -151,11 +165,20 @@ export function renderHuman(reports: KeyReport[], options: RenderOptions): strin
   return `${blockTexts.join("\n\n")}\n`;
 }
 
-export function renderJson(reports: KeyReport[]): string {
+export function renderJson(reports: KeyReport[], claude?: ClaudeUsage): string {
   const keys = reports.map((report) =>
     report.quota
-      ? { name: report.name, level: report.quota.level, windows: report.quota.windows }
-      : { name: report.name, error: report.error ?? "unknown error" },
+      ? {
+          name: report.name,
+          level: report.quota.level,
+          windows: report.quota.windows,
+          ...(report.inUse === true ? { inUse: true } : {}),
+        }
+      : {
+          name: report.name,
+          error: report.error ?? "unknown error",
+          ...(report.inUse === true ? { inUse: true } : {}),
+        },
   );
-  return `${JSON.stringify({ keys }, null, 2)}\n`;
+  return `${JSON.stringify({ keys, claudeCode: claude ?? { using: null } }, null, 2)}\n`;
 }
