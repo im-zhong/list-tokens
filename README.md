@@ -5,10 +5,14 @@ quota at a glance, and switch Claude Code (including its MCP servers) to any
 of them with one command.
 
 ```
-work  (plan: max)  3f9c2a1b8e7d4f6c.9xYzWv
+work  (plan: max)  3f9c2a1b8e7d4f6c.9xYzWv  ← claude code
   5h       1,665 /  28,000 credits  26,334 left    5%  [█░░░░░░░░░░░░░░░░░░░]  resets in 2h31m
   weekly  41,746 /  140,000 credits  98,253 left   29%  [██████░░░░░░░░░░░░░░]  resets in 4d13h
 ```
+
+The `← claude code` marker shows which key Claude Code's settings currently
+authenticate with; if that key is not in the store, the list ends with a note
+naming the unrecognized key.
 
 What it does:
 
