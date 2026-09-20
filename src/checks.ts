@@ -23,6 +23,9 @@ export interface ClaudeEndpoint {
 }
 
 const CHECK_TIMEOUT_MS = 10_000;
+// stdio servers launched via npx can spend tens of seconds on a cold package
+// download before they answer the handshake.
+const STDIO_TIMEOUT_MS = 30_000;
 
 const INIT_REQUEST = {
   jsonrpc: "2.0",
@@ -162,7 +165,7 @@ async function checkMcpStdio(server: McpServerConfig): Promise<CheckResult> {
   }
   // Real servers keep running after replying, so watch stdout for the
   // initialize result instead of waiting for the process to exit.
-  const deadline = startedAt + CHECK_TIMEOUT_MS;
+  const deadline = startedAt + STDIO_TIMEOUT_MS;
   const reader = proc.stdout.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
