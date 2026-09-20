@@ -49,6 +49,7 @@ const program = new Command()
   .description("Manage Zhipu GLM Coding Plan API keys and show their remaining quota.")
   .version(VERSION)
   .allowExcessArguments() // unmatched operands are reported by the default action below
+  .helpCommand("help [command]", "display help for command")
   .option("--json", "print machine-readable JSON instead of a table");
 
 function contextFromOptions(options: {

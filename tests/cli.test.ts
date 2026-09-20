@@ -502,6 +502,17 @@ describe("store errors and CLI plumbing", () => {
     expect(byFlag.exitCode).toBe(0);
     expect(byFlag.stdout.trim()).toBe(byCommand.stdout.trim());
   });
+
+  test("help command prints program and per-command help", async () => {
+    const byCommand = await run(["help"]);
+    expect(byCommand.exitCode).toBe(0);
+    expect(byCommand.stdout).toContain("Usage:");
+
+    const forAdd = await run(["help", "add"]);
+    expect(forAdd.exitCode).toBe(0);
+    expect(forAdd.stdout).toContain("Usage:");
+    expect(forAdd.stdout).toContain("<name> <apiKey>");
+  });
 });
 
 describe("use (switch Claude Code to a stored key)", () => {
