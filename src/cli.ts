@@ -34,7 +34,7 @@ import {
 
 const TOOL = "list-tokens";
 // Keep in sync with package.json version.
-const VERSION = "0.0.2";
+const VERSION = "0.0.3";
 
 /** Commander parser for --type: quota index 1 (legacy personal) or 2 (org-based). */
 function parseType(value: string): number {
