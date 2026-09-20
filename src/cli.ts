@@ -206,6 +206,13 @@ program
   });
 
 program
+  .command("version")
+  .description("Print the version")
+  .action(() => {
+    console.log(VERSION);
+  });
+
+program
   .command("check")
   .description("Verify a stored key against the quota API, Claude Code's endpoint, and MCP servers")
   .arguments("<name>")

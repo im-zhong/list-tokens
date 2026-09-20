@@ -492,6 +492,16 @@ describe("store errors and CLI plumbing", () => {
     expect(result.stdout).toContain("add");
     expect(result.stdout).toContain("rename");
   });
+
+  test("version command and flag both print the version", async () => {
+    const byCommand = await run(["version"]);
+    expect(byCommand.exitCode).toBe(0);
+    expect(byCommand.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
+
+    const byFlag = await run(["--version"]);
+    expect(byFlag.exitCode).toBe(0);
+    expect(byFlag.stdout.trim()).toBe(byCommand.stdout.trim());
+  });
 });
 
 describe("use (switch Claude Code to a stored key)", () => {
