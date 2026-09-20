@@ -36,6 +36,8 @@ list-tokens rename <from> <to>     # rename a stored key
 list-tokens remove <name>          # remove a stored key (alias: rm)
 list-tokens set <name> [--type 1|2] [--org <id>] [--project <id>]   # quota-query context
 list-tokens list                   # show quota for every key (alias: ls)
+list-tokens use <name> [--dry-run] [--check] # switch Claude Code to a stored key
+list-tokens check <name>           # verify a key end-to-end
 list-tokens                        # bare invocation lists
 list-tokens --json                 # machine-readable output
 ```
@@ -103,6 +105,41 @@ list-tokens set <name> --type 2 --org org-xxxx --project proj_xxxx
 
 `set` patches fields (`--type 2` first, then `--org/--project` works too),
 `--type 1` drops org/project, and `--clear-context` removes everything.
+
+## Switching Claude Code
+
+`list-tokens use <name>` rewrites the GLM API key used by Claude Code. It
+scans `~/.claude.json` (MCP server env blocks such as `Z_AI_API_KEY`),
+`~/.claude/settings.json`, and `~/.claude/settings.local.json`
+(`env.ANTHROPIC_AUTH_TOKEN`), replacing every string that looks like a GLM key
+(`32 hex chars . 16 alphanumeric chars`) with the selected key — field names
+don't matter, so new MCP servers are covered automatically. URLs and other
+values are never touched.
+
+Before writing, each modified file is backed up to `<file>.list-tokens.bak`
+and the write itself is atomic (temp file + rename). Use `--dry-run` to
+preview. Restart Claude Code afterwards — the running process keeps its old
+credentials. Override the scanned files with `LIST_TOKENS_CLAUDE_CONFIGS`
+(colon-separated paths).
+
+## Verifying a switch
+
+`list-tokens check <name>` (or `use --check`) probes, all in parallel:
+
+- the quota API for the key,
+- the Anthropic-compatible chat endpoint Claude Code uses, with a real
+  1-token request against the cheapest configured model (base URL and model
+  come from `settings.json`; skipped when no `ANTHROPIC_BASE_URL` is set),
+- an MCP `initialize` handshake (HTTP or stdio) for every configured server
+  that carries this key — servers without it are simply not probed.
+
+```
+✓ quota: max · 5h 0%, weekly 0%
+✓ anthropic endpoint (glm-5.3-flash): 1797ms
+✓ mcp zai-mcp-server: 510ms
+```
+
+The exit code is nonzero when any probe fails.
 
 ## Caveats
 

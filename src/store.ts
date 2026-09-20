@@ -292,7 +292,7 @@ export function renameKey(data: StoreData, from: string, to: string): StoreData 
   };
 }
 
-function notFoundMessage(data: StoreData, name: string): string {
+export function notFoundMessage(data: StoreData, name: string): string {
   const known = data.keys.map((key) => key.name);
   const hint =
     known.length === 0

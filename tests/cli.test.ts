@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,15 +20,40 @@ beforeAll(() => {
   server = Bun.serve({
     port: 0,
     fetch(request) {
+      const url = new URL(request.url);
+      // Anthropic-compatible chat endpoint used by the `check` probe.
+      if (request.method === "POST" && url.pathname === "/api/anthropic/v1/messages") {
+        const auth = request.headers.get("Authorization") ?? "";
+        if (auth === "Bearer good-key") {
+          return json({ id: "msg_1", content: [{ type: "text", text: "hi" }] });
+        }
+        return json({ error: { message: "invalid api key" } }, { status: 401 });
+      }
+      // Streamable-HTTP MCP endpoints used by the `check` probe.
+      if (request.method === "POST" && url.pathname === "/mcp/ok") {
+        return json({ jsonrpc: "2.0", id: 1, result: { serverInfo: { name: "http-stub" } } });
+      }
+      if (request.method === "POST" && url.pathname === "/mcp/sse") {
+        const payload = JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: { serverInfo: { name: "sse-stub" } },
+        });
+        return new Response(`event: message\ndata: ${payload}\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      if (request.method === "POST" && url.pathname === "/mcp/denied") {
+        return json({ error: "unauthorized" }, { status: 401 });
+      }
       const auth = request.headers.get("Authorization") ?? "";
-      // The endpoint expects the raw key, not "Bearer <key>".
+      // The quota endpoint expects the raw key, not "Bearer <key>".
       if (auth.startsWith("Bearer ")) {
         return json({ code: 401, msg: "invalid auth scheme", success: false }, { status: 401 });
       }
       // Org-based team key (like newer team plans): plain queries are rejected,
       // ?type=2 without org/project headers returns empty data.
       if (auth === "org-team-key") {
-        const url = new URL(request.url);
         if (url.searchParams.get("type") !== "2") {
           return json({ code: 500, msg: "当前用户不存在coding plan", success: false });
         }
@@ -466,5 +491,286 @@ describe("store errors and CLI plumbing", () => {
     expect(result.stdout).toContain("Usage:");
     expect(result.stdout).toContain("add");
     expect(result.stdout).toContain("rename");
+  });
+});
+
+describe("use (switch Claude Code to a stored key)", () => {
+  const OLD_TOKEN = `${"a".repeat(32)}.${"b".repeat(16)}`;
+  const OLD_MCP = `${"c".repeat(32)}.${"d".repeat(16)}`;
+
+  function writeClaudeConfig(name: string, content: string): string {
+    const file = join(tmpRoot, `${crypto.randomUUID()}-${name}`);
+    writeFileSync(file, content);
+    return file;
+  }
+
+  function settingsFixture(): string {
+    return writeClaudeConfig(
+      "settings.json",
+      JSON.stringify({
+        env: {
+          ANTHROPIC_AUTH_TOKEN: OLD_TOKEN,
+          ANTHROPIC_BASE_URL: "https://open.bigmodel.cn/api/anthropic",
+        },
+      }),
+    );
+  }
+
+  function claudeJsonFixture(): string {
+    return writeClaudeConfig(
+      "claude.json",
+      JSON.stringify({
+        mcpServers: {
+          "zai-mcp-server": { env: { Z_AI_API_KEY: OLD_MCP } },
+          "web-reader": { url: "https://open.bigmodel.cn/api/mcp/web_reader/mcp" },
+        },
+      }),
+    );
+  }
+
+  test("replaces keys across settings and MCP configs, with backups", async () => {
+    const config = newConfig();
+    await run(["add", "work", "good-key"], config);
+    const settings = settingsFixture();
+    const claudeJson = claudeJsonFixture();
+
+    const result = await run(["use", "work"], config, {
+      LIST_TOKENS_CLAUDE_CONFIGS: `${settings}:${claudeJson}`,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("env.ANTHROPIC_AUTH_TOKEN");
+    expect(result.stdout).toContain("mcpServers.zai-mcp-server.env.Z_AI_API_KEY");
+    expect(result.stdout).toContain('Switched Claude Code to "work"');
+    expect(result.stdout).toContain("Restart Claude Code");
+
+    const settingsAfter = JSON.parse(readFileSync(settings, "utf8")) as {
+      env: Record<string, string>;
+    };
+    expect(settingsAfter.env.ANTHROPIC_AUTH_TOKEN).toBe("good-key");
+    expect(settingsAfter.env.ANTHROPIC_BASE_URL).toBe("https://open.bigmodel.cn/api/anthropic");
+
+    const claudeAfter = JSON.parse(readFileSync(claudeJson, "utf8")) as {
+      mcpServers: Record<string, { url?: string; env?: Record<string, string> }>;
+    };
+    expect(claudeAfter.mcpServers["zai-mcp-server"]?.env?.Z_AI_API_KEY).toBe("good-key");
+    expect(claudeAfter.mcpServers["web-reader"]?.url).toBe(
+      "https://open.bigmodel.cn/api/mcp/web_reader/mcp",
+    );
+
+    const backup = JSON.parse(readFileSync(`${settings}.list-tokens.bak`, "utf8")) as {
+      env: Record<string, string>;
+    };
+    expect(backup.env.ANTHROPIC_AUTH_TOKEN).toBe(OLD_TOKEN);
+    expect(existsSync(`${settings}.list-tokens-tmp`)).toBe(false);
+  });
+
+  test("--dry-run previews without writing", async () => {
+    const config = newConfig();
+    await run(["add", "work", "good-key"], config);
+    const settings = settingsFixture();
+
+    const result = await run(["use", "work", "--dry-run"], config, {
+      LIST_TOKENS_CLAUDE_CONFIGS: settings,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Dry run — nothing written");
+
+    const after = JSON.parse(readFileSync(settings, "utf8")) as { env: Record<string, string> };
+    expect(after.env.ANTHROPIC_AUTH_TOKEN).toBe(OLD_TOKEN);
+    expect(existsSync(`${settings}.list-tokens.bak`)).toBe(false);
+  });
+
+  test("fails with a hint when no keys are found", async () => {
+    const config = newConfig();
+    await run(["add", "work", "good-key"], config);
+    const clean = writeClaudeConfig(
+      "clean.json",
+      JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://x" } }),
+    );
+
+    const result = await run(["use", "work"], config, { LIST_TOKENS_CLAUDE_CONFIGS: clean });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("no API keys found");
+  });
+
+  test("rejects unknown key names", async () => {
+    const config = newConfig();
+    const result = await run(["use", "nope"], config, {
+      LIST_TOKENS_CLAUDE_CONFIGS: settingsFixture(),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no key named "nope"');
+  });
+
+  test("skips broken JSON files but still patches good ones", async () => {
+    const config = newConfig();
+    await run(["add", "work", "good-key"], config);
+    const settings = settingsFixture();
+    const broken = writeClaudeConfig("broken.json", "not json");
+
+    const result = await run(["use", "work"], config, {
+      LIST_TOKENS_CLAUDE_CONFIGS: `${broken}:${settings}`,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("not valid JSON");
+    const after = JSON.parse(readFileSync(settings, "utf8")) as { env: Record<string, string> };
+    expect(after.env.ANTHROPIC_AUTH_TOKEN).toBe("good-key");
+    expect(readFileSync(broken, "utf8")).toBe("not json");
+  });
+});
+
+describe("check (post-switch verification)", () => {
+  const OLD_TOKEN = `${"a".repeat(32)}.${"b".repeat(16)}`;
+  const STUB_SCRIPT =
+    'const c=[];process.stdin.on("data",d=>{c.push(d);try{const r=JSON.parse(Buffer.concat(c).toString());process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:r.id,result:{serverInfo:{name:"stdio-stub"}}})+"\\n");process.exit(0);}catch{}});';
+
+  function writeClaudeConfig(name: string, content: string): string {
+    const file = join(tmpRoot, `${crypto.randomUUID()}-${name}`);
+    writeFileSync(file, content);
+    return file;
+  }
+
+  function checkConfigs(options: { keyInHeaders?: string } = {}): string {
+    const headerKey = options.keyInHeaders ?? "good-key";
+    const settings = writeClaudeConfig(
+      "settings.json",
+      JSON.stringify({
+        env: {
+          ANTHROPIC_BASE_URL: `http://127.0.0.1:${server.port}/api/anthropic`,
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: "test-flash",
+        },
+      }),
+    );
+    const claudeJson = writeClaudeConfig(
+      "claude.json",
+      JSON.stringify({
+        mcpServers: {
+          "http-ok": {
+            url: `http://127.0.0.1:${server.port}/mcp/ok`,
+            headers: { Authorization: `Bearer ${headerKey}` },
+          },
+          "sse-ok": {
+            url: `http://127.0.0.1:${server.port}/mcp/sse`,
+            headers: { Authorization: `Bearer ${headerKey}` },
+          },
+          "stdio-ok": {
+            command: "bun",
+            args: ["-e", STUB_SCRIPT],
+            env: { Z_AI_API_KEY: "good-key" },
+          },
+          "someone-else": {
+            url: `http://127.0.0.1:${server.port}/mcp/ok`,
+            headers: { Authorization: "Bearer other" },
+          },
+        },
+      }),
+    );
+    return `${settings}:${claudeJson}`;
+  }
+
+  test("skips MCP probes entirely when no servers carry the key", async () => {
+    const config = newConfig();
+    await run(["add", "work", "good-key"], config);
+    const settings = writeClaudeConfig(
+      "settings.json",
+      JSON.stringify({
+        env: { ANTHROPIC_BASE_URL: `http://127.0.0.1:${server.port}/api/anthropic` },
+      }),
+    );
+    const claudeJson = writeClaudeConfig("claude.json", JSON.stringify({ mcpServers: {} }));
+
+    const result = await run(["check", "work"], config, {
+      LIST_TOKENS_CLAUDE_CONFIGS: `${settings}:${claudeJson}`,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("✓ quota:");
+    expect(result.stdout).toContain("✓ anthropic endpoint");
+    expect(result.stdout).not.toContain("mcp");
+  });
+
+  test("probes quota, the anthropic endpoint, and carrying MCP servers", async () => {
+    const config = newConfig();
+    await run(["add", "work", "good-key"], config);
+
+    const result = await run(["check", "work"], config, {
+      LIST_TOKENS_CLAUDE_CONFIGS: checkConfigs(),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/✓ quota: max · 5h \d+%, weekly \d+%/);
+    expect(result.stdout).toContain("✓ anthropic endpoint (test-flash):");
+    expect(result.stdout).toContain("✓ mcp http-ok:");
+    expect(result.stdout).toContain("✓ mcp sse-ok:");
+    expect(result.stdout).toContain("✓ mcp stdio-ok:");
+    // Servers carrying a different key are not probed.
+    expect(result.stdout).not.toContain("someone-else");
+  });
+
+  test("reports failures with a nonzero exit code", async () => {
+    const config = newConfig();
+    await run(["add", "bad", "not-a-key"], config);
+    const settings = writeClaudeConfig(
+      "settings.json",
+      JSON.stringify({
+        env: { ANTHROPIC_BASE_URL: `http://127.0.0.1:${server.port}/api/anthropic` },
+      }),
+    );
+    const claudeJson = writeClaudeConfig(
+      "claude.json",
+      JSON.stringify({
+        mcpServers: {
+          denied: {
+            url: `http://127.0.0.1:${server.port}/mcp/denied`,
+            headers: { Authorization: "Bearer not-a-key" },
+          },
+        },
+      }),
+    );
+
+    const result = await run(["check", "bad"], config, {
+      LIST_TOKENS_CLAUDE_CONFIGS: `${settings}:${claudeJson}`,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain("✗ quota:");
+    expect(result.stdout).toContain("✗ anthropic endpoint");
+    expect(result.stdout).toContain("✗ mcp denied: HTTP 401");
+  });
+
+  test("use --check switches and verifies in one go", async () => {
+    const config = newConfig();
+    await run(["add", "work", "good-key"], config);
+    const settings = writeClaudeConfig(
+      "settings.json",
+      JSON.stringify({
+        env: {
+          ANTHROPIC_AUTH_TOKEN: OLD_TOKEN,
+          ANTHROPIC_BASE_URL: `http://127.0.0.1:${server.port}/api/anthropic`,
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: "test-flash",
+        },
+      }),
+    );
+    const claudeJson = writeClaudeConfig(
+      "claude.json",
+      JSON.stringify({
+        mcpServers: {
+          "http-ok": {
+            url: `http://127.0.0.1:${server.port}/mcp/ok`,
+            headers: { Authorization: `Bearer ${OLD_TOKEN}` },
+          },
+        },
+      }),
+    );
+
+    const result = await run(["use", "work", "--check"], config, {
+      LIST_TOKENS_CLAUDE_CONFIGS: `${settings}:${claudeJson}`,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Switched Claude Code to "work"');
+    expect(result.stdout).toContain("✓ anthropic endpoint (test-flash):");
+    expect(result.stdout).toContain("✓ mcp http-ok:");
+    // The MCP server now carries the new key, so the probe matched it.
+    const after = JSON.parse(readFileSync(claudeJson, "utf8")) as {
+      mcpServers: Record<string, { headers?: Record<string, string> }>;
+    };
+    expect(after.mcpServers["http-ok"]?.headers?.Authorization).toBe("Bearer good-key");
   });
 });

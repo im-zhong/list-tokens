@@ -1,6 +1,6 @@
 {
   "name": "list-tokens",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Manage Zhipu GLM Coding Plan API keys and show their remaining quota.",
   "type": "module",
   "private": true,

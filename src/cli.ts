@@ -8,12 +8,22 @@
  */
 
 import { Command, InvalidArgumentError } from "commander";
+import { type ClaudeEndpoint, renderChecks, runChecks } from "./checks";
+import {
+  applyKeySwap,
+  claudeConfigFiles,
+  gatherClaudeTargets,
+  maskKey,
+  planKeySwap,
+  serverCarriesKey,
+} from "./claude";
 import { fetchQuota } from "./quota";
 import { type KeyReport, renderHuman, renderJson } from "./report";
 import {
   addKey,
   configPath,
   loadStore,
+  notFoundMessage,
   type QueryContext,
   removeKey,
   renameKey,
@@ -24,7 +34,7 @@ import {
 
 const TOOL = "list-tokens";
 // Keep in sync with package.json version.
-const VERSION = "0.1.0";
+const VERSION = "0.0.1";
 
 /** Commander parser for --type: quota index 1 (legacy personal) or 2 (org-based). */
 function parseType(value: string): number {
@@ -144,6 +154,67 @@ program
   );
 
 program
+  .command("use")
+  .description("Point Claude Code (settings + MCP servers) at a stored key")
+  .arguments("<name>")
+  .option("--dry-run", "show what would change without writing")
+  .option("--check", "verify the key against Claude Code and MCP servers after switching")
+  .action(async (name: string, options: { dryRun?: boolean; check?: boolean }) => {
+    const storePath = configPath();
+    const data = await loadStore(storePath);
+    const target = data.keys.find((key) => key.name === name.trim());
+    if (!target) {
+      throw new Error(notFoundMessage(data, name.trim()));
+    }
+    const files = claudeConfigFiles();
+    const plans = await planKeySwap(files, target.apiKey);
+    for (const plan of plans) {
+      if (plan.problem) {
+        process.stderr.write(`${TOOL}: ${plan.file}: ${plan.problem}\n`);
+        continue;
+      }
+      for (const change of plan.replacements) {
+        const field = change.field.replace(/^\./, "") || "(root)";
+        console.log(`${plan.file}: ${field}  ${change.maskedOld} → ${maskKey(target.apiKey)}`);
+      }
+    }
+    const total = plans.reduce((sum, plan) => sum + plan.replacements.length, 0);
+    if (total === 0) {
+      throw new Error(
+        `no API keys found to replace in: ${plans.map((plan) => plan.file).join(", ")} (missing files are skipped)`,
+      );
+    }
+    if (options.dryRun !== true) {
+      for (const plan of plans) {
+        if (plan.replacements.length > 0 && plan.next !== undefined) {
+          await applyKeySwap(plan);
+          console.log(`Backed up ${plan.file} → ${plan.file}.list-tokens.bak`);
+        }
+      }
+      console.log(
+        `Switched Claude Code to "${target.name}" (${total} replacement${total === 1 ? "" : "s"}). Restart Claude Code to pick it up.`,
+      );
+      if (options.check === true) {
+        const ok = await runChecksFor(target.name);
+        if (!ok) process.exitCode = 1;
+      }
+    } else {
+      console.log(
+        `Dry run — nothing written (would make ${total} replacement${total === 1 ? "" : "s"}).`,
+      );
+    }
+  });
+
+program
+  .command("check")
+  .description("Verify a stored key against the quota API, Claude Code's endpoint, and MCP servers")
+  .arguments("<name>")
+  .action(async (name: string) => {
+    const ok = await runChecksFor(name);
+    if (!ok) process.exitCode = 1;
+  });
+
+program
   .command("list")
   .alias("ls")
   .description("Show quota for every stored key (default when no command is given)")
@@ -164,6 +235,29 @@ program.action(async (_options: unknown, command: Command) => {
 // of subcommand arguments, so `list --json` lands here either way.
 function jsonRequested(): boolean {
   return program.opts<{ json?: boolean }>().json === true;
+}
+
+/** Probe the named key: quota API, the Anthropic-compatible endpoint from
+ * settings.json, and every MCP server carrying this key. Returns false when
+ * any probe failed (results are printed). */
+async function runChecksFor(name: string): Promise<boolean> {
+  const data = await loadStore(configPath());
+  const target = data.keys.find((key) => key.name === name.trim());
+  if (!target) {
+    throw new Error(notFoundMessage(data, name.trim()));
+  }
+  const { env, servers } = await gatherClaudeTargets(claudeConfigFiles());
+  const endpoint: ClaudeEndpoint = {
+    baseUrl: env.ANTHROPIC_BASE_URL,
+    model:
+      env.ANTHROPIC_DEFAULT_HAIKU_MODEL ??
+      env.ANTHROPIC_MODEL ??
+      env.ANTHROPIC_DEFAULT_SONNET_MODEL,
+  };
+  const matching = servers.filter((server) => serverCarriesKey(server, target.apiKey));
+  const results = await runChecks(target, endpoint, matching);
+  process.stdout.write(renderChecks(results, useColor()));
+  return results.every((result) => result.ok);
 }
 
 async function runList(json: boolean): Promise<void> {
