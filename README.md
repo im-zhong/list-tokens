@@ -1,6 +1,8 @@
 # list-tokens
 
-Manage Zhipu GLM Coding Plan API keys and show their remaining quota.
+Manage a pool of Zhipu GLM Coding Plan API keys: see every key's remaining
+quota at a glance, and switch Claude Code (including its MCP servers) to any
+of them with one command.
 
 ```
 work  (plan: max)  3f9c2a1b8e7d4f6c.9xYzWv
@@ -8,25 +10,55 @@ work  (plan: max)  3f9c2a1b8e7d4f6c.9xYzWv
   weekly  41,746 /  140,000 credits  98,253 left   29%  [██████░░░░░░░░░░░░░░]  resets in 4d13h
 ```
 
-Keys are stored in `~/.list-tokens.json` (mode `0600` — the file contains
-secrets). Quotas are fetched in parallel from
-`https://open.bigmodel.cn/api/monitor/usage/quota/limit`; a key that fails to
-answer shows an `error:` line instead of failing the run.
+What it does:
 
-On a color terminal the percentage bar is a traffic light by how much of the
-window is left: green (>50% left), yellow (20–50%), red (<20%). Set `NO_COLOR`
-to disable.
+- **Quota overview** — all keys queried in parallel from
+  `https://open.bigmodel.cn/api/monitor/usage/quota/limit`, with 5h / weekly /
+  monthly windows, reset countdowns, and a traffic-light bar (green >50% left,
+  yellow 20–50%, red <20%). A failing key shows an `error:` line without
+  failing the run; `--json` makes the whole thing scriptable for key-pool
+  routing.
+- **Every plan shape seen in the wild** — legacy personal plans (credits),
+  team plans that only report percentages, and newer org-based accounts that
+  need `?type=2` plus `bigmodel-organization`/`bigmodel-project` headers.
+- **Switch Claude Code** — `use <name>` rewrites the GLM key inside
+  `~/.claude/settings.json` (`ANTHROPIC_AUTH_TOKEN`) and every MCP server in
+  `~/.claude.json` (env blocks and `Authorization` headers), with backups and
+  atomic writes.
+- **Verify after switching** — `check <name>` probes the quota API, the
+  Anthropic-compatible chat endpoint with a real 1-token request, and MCP
+  `initialize` handshakes for the servers carrying the key.
 
-## Build
+Keys are stored in a single file, `~/.list-tokens.json` (mode `0600` — the
+file contains secrets). It is the only configuration this tool owns; `use`
+additionally leaves `<file>.list-tokens.bak` backups of the Claude config
+files it rewrites.
 
-Requires [Bun](https://bun.sh):
+## Installation
+
+Install the latest release to `~/.local/bin` (macOS arm64, Linux arm64,
+Linux x86_64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/im-zhong/list-tokens/main/install.sh | sh
+```
+
+Or pick a binary from the
+[releases page](https://github.com/im-zhong/list-tokens/releases) yourself:
+
+```sh
+curl -fsSL -o ~/.local/bin/list-tokens \
+  https://github.com/im-zhong/list-tokens/releases/latest/download/list-tokens-darwin-arm64
+chmod +x ~/.local/bin/list-tokens
+```
+
+The binaries are standalone (Bun-compiled, no runtime needed). Building from
+source requires [Bun](https://bun.sh):
 
 ```sh
 bun install
-bun run build        # produces dist/list-tokens (dist/list-tokens.exe on Windows)
+bun run build        # produces dist/list-tokens
 ```
-
-The executable is standalone; copy it anywhere on your `PATH`.
 
 ## Usage
 
@@ -87,6 +119,7 @@ percentages only — those rows show `N%` without absolute counts.
 | ---------------------- | -------------------------------------------------- |
 | `LIST_TOKENS_CONFIG`   | Path of the key store (default `~/.list-tokens.json`) |
 | `LIST_TOKENS_API_URL`  | Base URL of the quota API (default `https://open.bigmodel.cn`) |
+| `LIST_TOKENS_CLAUDE_CONFIGS` | Claude config files scanned by `use`/`check` (colon-separated) |
 | `NO_COLOR`             | Disable colored output when set to a non-empty value |
 
 ## Org-based keys
