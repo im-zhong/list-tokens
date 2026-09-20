@@ -1,0 +1,13 @@
+# Read-only checks, run in parallel; they never edit or stage files.
+# CI runs the same commands via `bun run check`.
+pre-commit:
+  parallel: true
+  jobs:
+    - name: lint
+      run: bun run lint
+    - name: typecheck
+      run: bun run typecheck
+    - name: tests
+      run: bun test
+    - name: compiled-tests
+      run: bun run test:compiled
