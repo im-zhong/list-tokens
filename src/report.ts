@@ -101,8 +101,10 @@ export function renderHuman(reports: KeyReport[], options: RenderOptions): strin
   const blocks: Block[] = reports.map((report) => {
     const plan = report.quota?.level !== undefined ? `  (plan: ${report.quota.level})` : "";
     const keyText = report.apiKey !== undefined ? `  ${report.apiKey}` : "";
-    const inUse = report.inUse === true ? `  ${style.cyan("← claude code")}` : "";
-    const header = `${style.bold(report.name)}${plan}${keyText}${inUse}`;
+    // Two-char status slot keeps names aligned; ● marks the key Claude Code
+    // authenticates with (visible even without color).
+    const marker = report.inUse === true ? style.cyan("●") : " ";
+    const header = `${marker} ${style.bold(report.name)}${plan}${keyText}`;
     if (report.error) {
       return { header, error: report.error, rows: [] };
     }

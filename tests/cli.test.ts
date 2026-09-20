@@ -483,9 +483,9 @@ describe("list", () => {
 
     const result = await run(["list"], config, { LIST_TOKENS_CLAUDE_CONFIGS: settings });
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("work  (plan: max)  good-key  ← claude code");
-    expect(result.stdout).toContain("other  flat-key\n");
-    expect(result.stdout).not.toContain("flat-key  ← claude code");
+    expect(result.stdout).toContain("● work  (plan: max)  good-key");
+    expect(result.stdout).toContain("  other  flat-key\n");
+    expect(result.stdout).not.toContain("● other");
 
     const json = await run(["--json"], config, { LIST_TOKENS_CLAUDE_CONFIGS: settings });
     const parsed = JSON.parse(json.stdout) as {
@@ -509,7 +509,7 @@ describe("list", () => {
     const result = await run(["list"], config, { LIST_TOKENS_CLAUDE_CONFIGS: settings });
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("which is not in this list");
-    expect(result.stdout).not.toContain("← claude code");
+    expect(result.stdout).not.toContain("● ");
   });
 });
 
