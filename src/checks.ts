@@ -34,7 +34,7 @@ const INIT_REQUEST = {
   params: {
     protocolVersion: "2025-03-26",
     capabilities: {},
-    clientInfo: { name: "list-tokens", version: "0.1.0" },
+    clientInfo: { name: "list-tokens", version: "0.0.2" },
   },
 };
 
